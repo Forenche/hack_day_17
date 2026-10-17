@@ -47,6 +47,13 @@ cannot be better than its input.
   The tools cannot say why. The agent says so instead of guessing.
 - Error-log counts (e.g. `lowmemorykiller`) change between runs because the log rolls over, and are often
   vendor noise. Core counts from `nproc` are online cores only, so per-core load is approximate.
+- On the test phone, Android's own "computed drain" header (706 mAh) disagrees with the sum of its own per-app and
+  component estimates (about 4,400 mAh), and the model puts CPU at 68% of the total. The agent therefore withholds
+  absolute figures when they disagree by more than 2x and reports relative shares only. Treat shares as Android's
+  power-model estimate, not a measurement.
+- Kernel wakelock names are vendor-specific; the labels in the digest are guesses from the name.
+- Small models (gemma4:e4b) sometimes get comparisons wrong even when the digest states them. The agent flags
+  comparison words with `??` and asks for one rewrite; a human should still read the quoted evidence.
 - Tested on one phone model. Other vendors print the same `dumpsys` sections but with differences.
 
 ## Privacy

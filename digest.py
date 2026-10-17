@@ -362,12 +362,20 @@ def history_digest(dump, pkgs=None):
     out.append("mAh values are RELATIVE estimates from Android's power model" +
                (f" (battery capacity {h['capacity']} mAh)" if h["capacity"] else "") +
                ": compare them, never add them up or treat them as exact drain.")
-    if h.get("computed"):
-        out.append(f"Android's own totals: computed drain {h['computed']} mAh, actual drain {h['actual']} mAh"
-                   + (f", battery capacity {h['capacity']} mAh" if h["capacity"] else "")
-                   + " (report them as given; do not convert them to percent)")
     uids = h["uids"]
     total = sum(u["total"] for u in uids) or 1.0
+    if h.get("computed"):
+        try:
+            comp = float(h["computed"])
+        except ValueError:
+            comp = 0.0
+        if comp > 0 and 0.5 <= total / comp <= 2:
+            out.append(f"Android's own totals: computed drain {h['computed']} mAh, actual drain {h['actual']} mAh"
+                       + (f", battery capacity {h['capacity']} mAh" if h["capacity"] else "")
+                       + " (report them as given; do not convert them to percent)")
+        elif comp > 0:
+            out.append("Absolute drain figures in this dump disagree with each other, so none are reported; "
+                       "only relative shares below can be used.")
     comp = {k: v for k, v in h["components"].items() if v > 0}
     if comp:
         ct = sum(comp.values())
@@ -382,9 +390,9 @@ def history_digest(dump, pkgs=None):
             out.append("System components (NOT apps), share of attributed estimate: " +
                        ", ".join(f"{app_name(u['uid'], pkgs)} {100 * u['total'] / total:.0f}%"
                                  for u in sorted(sysu, key=lambda u: -u["total"])[:4]))
-            out.append("Split of attributed estimate: system components "
-                       f"{100 * sum(u['total'] for u in sysu) / total:.0f}% | apps "
-                       f"{100 * sum(u['total'] for u in apps) / total:.0f}%")
+            sp, ap = (100 * sum(u["total"] for u in g) / total for g in (sysu, apps))
+            out.append(f"Split of attributed estimate: system components {sp:.0f}% | apps {ap:.0f}%"
+                       f" (the larger share is {'system components' if sp > ap else 'apps'})")
         out.append("Top apps by estimated use (share | foreground | background | foreground-service time; "
                    "times are wall-clock, so judge by share):")
         for i, u in enumerate(sorted(apps, key=lambda u: -u["total"])[:5], 1):
@@ -405,11 +413,11 @@ def history_digest(dump, pkgs=None):
                 (f" ({x['times']}x)" if x["times"] else "") for x in wl]
     elif h["wake"]:
         out.append("Partial wakelocks: none of 15m or longer (shorter ones omitted as too small to matter)")
-    kl = sorted([x for x in h["kernel"] if x["secs"] >= KERNEL_SHOW_SECS and x["name"] != "PowerManagerService.WakeLocks"],
+    kl = sorted([x for x in h["kernel"] if x["secs"] >= KERNEL_SHOW_SECS and x["name"] not in ("PowerManagerService.WakeLocks", "PowerManagerService.Display")],
                 key=lambda x: -x["secs"])[:6]
     if kl:
-        out.append("Longest kernel wakelocks of 10m or more, excluding the PowerManagerService.WakeLocks total "
-                   "(can overlap, do not add up; the label after the arrow is only a guess from the name):")
+        out.append("Longest kernel wakelocks of 10m or more, excluding the PowerManagerService.WakeLocks total and the "
+                   "screen-on lock PowerManagerService.Display (can overlap, do not add up; the label after the arrow is only a guess from the name):")
         for x in kl:
             hint = kernel_hint(x["name"])
             out.append(f"  {x['name'][:50]} {fmt_dur(x['secs'])}" + (f" ({x['times']}x)" if x["times"] else "") +

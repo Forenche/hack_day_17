@@ -35,11 +35,14 @@ check("digest: 2h wakelock rule fires with the audio caveat", "com.example.music
 check("digest: fgs rule ranks by energy, not hours", "foreground-service energy is >= 1% of the estimate: com.example.music 8% (3h 20m of service time)" in d)
 check("digest: wall-clock caveat present", "say nothing about energy" in d)
 check("digest: system-vs-apps split computed in code", "Split of attributed estimate: system components" in d)
+check("digest: split states which side is larger", "(the larger share is apps)" in d)
 check("digest: off-foreground energy ranking", "NOT in the foreground (background + foreground-service + cached; share of attributed estimate): com.example.music 9%" in d)
 check("digest: zero-count wakelock prints no (0x)", "(0x)" not in d)
-check("digest: android drain totals shown as given", "computed drain 600 mAh, actual drain 600 mAh" in d and "do not convert" in d)
+check("digest: android drain totals shown as given when they match the rows", "computed drain 3000 mAh, actual drain 3000 mAh" in d and "do not convert" in d)
+bad = digest.history_digest(samples.batterystats().replace("Computed drain: 3000, actual drain: 3000", "Computed drain: 600, actual drain: 600"), pk)
+check("digest: inconsistent drain totals are withheld", "computed drain" not in bad and "disagree with each other" in bad)
 check("digest: kernel wakelocks listed with name-based hint", "hal_bluetooth_lock" in d and "name suggests Bluetooth" in d and "rmnet_ipa%d" in d and "name suggests mobile data" in d)
-check("digest: kernel aggregate and short locks excluded", "\n  PowerManagerService.WakeLocks" not in d and "alarmtimer" not in d)
+check("digest: kernel aggregate, screen-on lock and short locks excluded", "\n  PowerManagerService.WakeLocks" not in d and "\n  PowerManagerService.Display" not in d and "alarmtimer" not in d)
 cl = digest.capacity_line("5000000\n5000000\n5\n")
 check("capacity: equal full/design does not claim wear status", "wear is NOT established" in cl and "charge cycles 5" in cl)
 check("capacity: worn battery reported as percent of design", "82% of design" in digest.capacity_line(samples.CAPACITY))
@@ -69,6 +72,8 @@ with tempfile.TemporaryDirectory() as td:
     open(p16, "wb").write(b"\xff\xfe" + samples.PACKAGES.encode("utf-16-le"))
     check("utf-16 (PowerShell '>') file reads", "com.example.chat" in digest.read_text_auto(p16))
 
+check("comparison: flagged only in the suggestion part", agent.comparison_claims("Evidence: the most energy\nWhat it suggests: 45% is higher than 55%.\nNot checked: the least") == ["higher", "than"] or agent.comparison_claims("Evidence: the most energy\nWhat it suggests: 45% is higher than 55%.\nNot checked: the least") == ["higher"])
+check("comparison: nothing flagged without a suggestion section", agent.comparison_claims("the most energy") == [])
 check("grounding: flags an invented number", agent.ungrounded_numbers("battery is 99% and 41%", "Level: 41%") == ["99"])
 
 # ---- agent loop against a mock Ollama
@@ -93,6 +98,29 @@ with tempfile.TemporaryDirectory() as td:
     check("dump mode: model cannot reach snapshot tools", r["called"] == [])
     r = agent.run_question(host, "mock", "What drained my battery?", dump)
     check("dump mode: history works from a UTF-16 file", r["called"] == ["get_battery_history"] and "Google Play services" in r["tool_text"])
+
+# retry-on-comparison, with the model call replaced by a script
+_orig_chat = agent.chat
+_seq = [{"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "get_battery_history", "arguments": {}}}]},
+        {"role": "assistant", "content": "Evidence: x\nWhat it suggests: 45% is higher than 55%.\nNot checked: y"},
+        {"role": "assistant", "content": "Evidence: x\nWhat it suggests: system 45%, apps 55%.\nNot checked: y"}]
+_seen = []
+
+
+def _fake_chat(host, model, messages, tools, think, temp=0.0):
+    _seen.append(messages[-1]["content"])
+    return _seq.pop(0)
+
+
+agent.chat = _fake_chat
+r = agent.run_question("h", "m", "Why did my battery drain?", agent.Backend("fake"))
+check("retry: comparison words trigger one rewrite that replaces the answer", r["retried"] and "system 45%, apps 55%" in r["answer"] and len(_seen) == 3)
+_seq[:] = [{"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "get_battery_history", "arguments": {}}}]},
+           {"role": "assistant", "content": "Evidence: x\nWhat it suggests: 45% is higher than 55%.\nNot checked: y"}]
+_seen.clear()
+r = agent.run_question("h", "m", "Why did my battery drain?", agent.Backend("fake"), retry=False)
+check("retry: --no-retry leaves the answer alone", not r["retried"] and "higher" in r["answer"] and len(_seen) == 2)
+agent.chat = _orig_chat
 
 print("\n%d failed" % len(fails) if fails else "\nall passed")
 raise SystemExit(1 if fails else 0)

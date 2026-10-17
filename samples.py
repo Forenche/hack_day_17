@@ -89,7 +89,7 @@ def batterystats():
           "  Start clock time: 2026-01-02-08-00-00"]
     L += [f"  filler stats line {i}" for i in range(60)]
     L += ["  Estimated power use (mAh):",
-          "    Capacity: 5000, Computed drain: 600, actual drain: 600",
+          "    Capacity: 5000, Computed drain: 3000, actual drain: 3000",
           "    Global",
           "    screen: 500 apps: 500",
           "    cpu: 2000 apps: 1990 duration: 9h 0m 0s 0ms",
@@ -112,6 +112,7 @@ def batterystats():
     L += [f"  filler power line {i}" for i in range(50)]
     L += ["  All kernel wake locks:",
           "  Kernel Wake lock PowerManagerService.WakeLocks: 1h 50m 47s 477ms (2 times) realtime",
+          "  Kernel Wake lock PowerManagerService.Display: 14m 38s 238ms (18 times) realtime",
           "  Kernel Wake lock rmnet_ipa%d: 10m 44s 780ms (2456 times) realtime",
           "  Kernel Wake lock hal_bluetooth_lock: 12m 5s 1ms (501 times) realtime",
           "  Kernel Wake lock alarmtimer.0.auto: 4m 41s 755ms (140 times) realtime",

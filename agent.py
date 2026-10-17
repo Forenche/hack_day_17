@@ -60,11 +60,13 @@ RULES
 - Kernel threads, system components and system services are not apps; say so when they matter.
 - Do not call anything normal, high, hot or a problem unless the output gives a baseline or the device's own status for it. Otherwise describe the ranking.
 - Label anything inferred as "possible" and name the quoted line it comes from.
+- A claim about a category (for example Bluetooth or mobile data) may only be made from a line you have quoted, and a label the tool marks as a guess stays a guess: say "the name suggests".
+- Do not compare numbers yourself. Where the tool states a ranking or which side is larger, copy it; otherwise list the figures without words like higher, lower or most.
 - Say plainly what the data cannot show.
 
 FORMAT
 Evidence: at most 4 bullets, each one short quoted line; never paste whole sections.
-What it suggests: only conclusions the quoted lines support, else "nothing obvious".
+What it suggests: start with the single most important finding in one sentence, then at most two supporting ones; only conclusions the quoted lines support, else "nothing obvious".
 Not checked: what these tools cannot tell you."""
 
 
@@ -172,6 +174,18 @@ def ungrounded_numbers(answer, tool_text):
     return sorted({n for n in re.findall(r"\d+(?:\.\d+)?", answer) if len(n.replace(".", "")) >= 2 and n not in have})
 
 
+COMPARE_RE = re.compile(r"\b(higher|lower|larger|smaller|greater|bigger|more than|less than|most|least)\b", re.I)
+
+
+def comparison_claims(answer):
+    """Comparison words in the 'What it suggests' part only. Small models are unreliable at comparing
+    numbers, and the grounding check cannot see that, so these are flagged for a human to verify."""
+    if "What it suggests" not in answer:
+        return []
+    part = answer.split("What it suggests", 1)[1].split("Not checked", 1)[0]
+    return sorted({m.lower() for m in COMPARE_RE.findall(part)})
+
+
 QUESTIONS = [
     ("Why did my battery drain since the last charge?", {"get_battery_history"}, 1),
     ("What drained my battery that I didn't actively use?", {"get_battery_history"}, 1),
@@ -188,6 +202,9 @@ def show(res):
     bad = ungrounded_numbers(res["answer"], res["tool_text"])
     if bad:
         print(f"\n!! numbers in the answer not found in tool output: {bad}")
+    cmp = comparison_claims(res["answer"])
+    if cmp:
+        print(f"\n?? comparison words in the answer {cmp}: small models often get these wrong; check them against the digest.")
 
 
 def main():
