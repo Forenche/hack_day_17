@@ -166,6 +166,8 @@ def cpu_digest(text, cores=None):
         if cores:
             s += f" on {cores} cores = {l1 / cores:.2f} per core (rough; Linux load also counts waiting tasks)"
         out.append(s)
+    out.append("Unit: each process percentage is of ONE core over the window (100% = one core fully busy), so a "
+               "multi-threaded process can exceed 100%; the device maximum is 100% times the number of cores.")
     rows = []
     for l in text.splitlines():
         if (m := CPU_RE.match(l)):
