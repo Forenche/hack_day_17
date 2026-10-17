@@ -1,1 +1,6 @@
 .venv
+
+# Generated artifacts
+batterystats*.txt
+packages_uid.txt
+__pycache__/
