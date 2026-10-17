@@ -288,6 +288,9 @@ def parse_history(dump):
             h["on_battery"] = parse_dur(m.group(1))
         elif (m := re.match(r"\s*Time on battery screen off:\s*(.+?) \(", l)):
             h["screen_off"] = parse_dur(m.group(1))
+        elif (m := re.match(r"\s*(Discharge|Screen on discharge|Screen off discharge|Screen doze discharge|"
+                            r"Device light doze discharge|Device deep doze discharge):\s*([\d.]+) mAh", l)):
+            h.setdefault("disch", {})[m.group(1)] = float(m.group(2))
         elif (m := re.match(r"\s*Start clock time:\s*(\d{4})-(\d\d)-(\d\d)-(\d\d)-(\d\d)-(\d\d)", l)):
             h["start"] = "%s-%s-%s %s:%s:%s" % m.groups()
     p = next((i for i in range(start, len(lines)) if "Estimated power use (mAh):" in lines[i]), None)
@@ -359,12 +362,35 @@ def history_digest(dump, pkgs=None):
             s += (f"; screen on about {fmt_dur(h['on_battery'] - h['screen_off'])}, "
                   f"screen off {fmt_dur(h['screen_off'])}")
         out.append(s)
-    out.append("mAh values are RELATIVE estimates from Android's power model" +
-               (f" (battery capacity {h['capacity']} mAh)" if h["capacity"] else "") +
-               ": compare them, never add them up or treat them as exact drain.")
+    if h.get("disch", {}).get("Discharge"):
+        out.append("Per-app and per-component mAh values below are RELATIVE modelled estimates (Android's power model); "
+                   "only the lines marked 'Measured' come from the battery level. Use shares, do not convert estimates to mAh. "
+                   "These shares cover the WHOLE window, screen on and off together; they cannot be split by screen state, "
+                   "so do not present them as the cause of the screen-off figure.")
+    else:
+        out.append("mAh values are RELATIVE estimates from Android's power model" +
+                   (f" (battery capacity {h['capacity']} mAh)" if h["capacity"] else "") +
+                   ": compare them, never add them up or treat them as exact drain.")
     uids = h["uids"]
     total = sum(u["total"] for u in uids) or 1.0
-    if h.get("computed"):
+    dis = h.get("disch", {})
+    if dis.get("Discharge"):
+        tot = dis["Discharge"]
+        s = f"Measured discharge (from the battery level, since last charge): {tot:.0f} mAh"
+        if h["capacity"]:
+            s += f" of {h['capacity']} mAh capacity ({100 * tot / h['capacity']:.0f}%)"
+        if "Screen on discharge" in dis and "Screen off discharge" in dis:
+            s += (f"; during screen-on {dis['Screen on discharge']:.0f} mAh ({100 * dis['Screen on discharge'] / tot:.0f}%)"
+                  f", during screen-off {dis['Screen off discharge']:.0f} mAh ({100 * dis['Screen off discharge'] / tot:.0f}%)")
+        if "Device light doze discharge" in dis and "Device deep doze discharge" in dis:
+            s += (f"; device idle (doze) discharge: light {dis['Device light doze discharge']:.0f} mAh"
+                  f", deep {dis['Device deep doze discharge']:.0f} mAh")
+        out.append(s + ".")
+        ratio = total / tot
+        out.append(f"The per-app estimates below add up to {total:.0f} mAh, {100 * ratio:.0f}% of the measured figure: " +
+                   ("consistent with it, so the shares below are consistent with the measured drain." if 0.7 <= ratio <= 1.3 else
+                    "they do not match the measurement, so treat the shares with caution."))
+    elif h.get("computed"):
         try:
             comp = float(h["computed"])
         except ValueError:

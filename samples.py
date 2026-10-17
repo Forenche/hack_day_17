@@ -85,6 +85,12 @@ def batterystats():
           "  Time on battery: 10h 5m 0s 0ms (80.0%) realtime, 6h 0m 0s 0ms (79.0%) uptime",
           "  Time on battery screen off: 6h 0m 0s 0ms (59.5%) realtime, 2h 0m 0s 0ms (33.0%) uptime",
           "  Time on battery screen doze: 3h 0m 0s 0ms (29.7%)",
+          "  Discharge: 2900 mAh",
+          "  Screen off discharge: 800 mAh",
+          "  Screen doze discharge: 300 mAh",
+          "  Screen on discharge: 2100 mAh",
+          "  Device light doze discharge: 200 mAh",
+          "  Device deep doze discharge: 100 mAh",
           "  Total run time: 12h 36m 0s 0ms realtime, 7h 30m 0s 0ms uptime",
           "  Start clock time: 2026-01-02-08-00-00"]
     L += [f"  filler stats line {i}" for i in range(60)]

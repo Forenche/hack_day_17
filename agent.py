@@ -61,6 +61,7 @@ RULES
 - Do not call anything normal, high, hot or a problem unless the output gives a baseline or the device's own status for it. Otherwise describe the ranking.
 - Label anything inferred as "possible" and name the quoted line it comes from.
 - A claim about a category (for example Bluetooth or mobile data) may only be made from a line you have quoted, and a label the tool marks as a guess stays a guess: say "the name suggests".
+- Prefer figures marked "Measured" over modelled shares when the question is about how much was used; for drain the user did not cause, use the measured screen-off figure.
 - Do not compare numbers yourself. Where the tool states a ranking or which side is larger, copy it; otherwise list the figures without words like higher, lower or most.
 - Say plainly what the data cannot show.
 
@@ -145,7 +146,7 @@ def chat(host, model, messages, tools, think, temp=0.0):
     return r.json()["message"]
 
 
-def run_question(host, model, question, backend, think=False, temp=0.0):
+def run_question(host, model, question, backend, think=False, temp=0.0, retry=True):
     names = backend.tools()
     msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": question}]
     called, bad, tool_text, answer = [], [], [], ""
@@ -163,8 +164,20 @@ def run_question(host, model, question, backend, think=False, temp=0.0):
             (called if n in names else bad).append(n)
             tool_text.append(out)
             msgs.append({"role": "tool", "tool_name": n, "content": out})
+    retried = False
+    cw = comparison_claims(answer) if answer else []
+    if retry and cw:  # one self-correction round: small models slip on comparisons
+        msgs.append({"role": "assistant", "content": answer})
+        msgs.append({"role": "user", "content":
+                     f"Your 'What it suggests' used comparison words {cw}. These are often wrong. Rewrite the whole answer in the "
+                     "same format without comparing numbers yourself: copy any ranking or 'larger share' wording from the tool "
+                     "output exactly, otherwise just list the figures."})
+        m = chat(host, model, msgs, tool_specs(names), think, temp)
+        text = (m.get("content") or "").strip()
+        if text and not m.get("tool_calls"):
+            answer, retried = text, True
     return {"called": called, "bad": bad, "answer": answer, "secs": time.time() - t0,
-            "tool_text": "\n".join(tool_text)}
+            "tool_text": "\n".join(tool_text), "retried": retried}
 
 
 def ungrounded_numbers(answer, tool_text):
@@ -199,6 +212,8 @@ QUESTIONS = [
 def show(res):
     print(f"[tools: {res['called'] or 'NONE'}{'  INVALID: ' + str(res['bad']) if res['bad'] else ''}  {res['secs']:.1f}s]")
     print(res["answer"] or "(empty answer)")
+    if res.get("retried"):
+        print("\n(rewritten once after the model used comparison words in its first answer)")
     bad = ungrounded_numbers(res["answer"], res["tool_text"])
     if bad:
         print(f"\n!! numbers in the answer not found in tool output: {bad}")
@@ -216,6 +231,7 @@ def main():
     ap.add_argument("--fake", action="store_true", help="synthetic data, no phone")
     ap.add_argument("--dump", help="saved `adb shell dumpsys batterystats` output (history tool only)")
     ap.add_argument("--packages", help="saved `adb shell pm list packages -U` output")
+    ap.add_argument("--no-retry", action="store_true", help="do not ask the model to rewrite answers that contain comparison words")
     ap.add_argument("--root", action="store_true", help="also read battery design/full capacity and cycles via su (rooted phone, opt-in)")
     ap.add_argument("--ask")
     ap.add_argument("--eval", action="store_true")
@@ -235,7 +251,7 @@ def main():
         ok, lats = 0, []
         qs = QUESTIONS if backend.mode != "dump" else QUESTIONS[:2]
         for q, must, k in qs:
-            r = run_question(a.host, a.model, q, backend, a.think, a.temp)
+            r = run_question(a.host, a.model, q, backend, a.think, a.temp, not a.no_retry)
             good = must <= set(r["called"]) and len(set(r["called"])) >= k and not r["bad"] and bool(r["answer"])
             ok += good
             lats.append(r["secs"])
@@ -245,11 +261,11 @@ def main():
               "PASS says nothing about answer quality: read the answers and the '!!' lines.")
         return
     if a.ask:
-        show(run_question(a.host, a.model, a.ask, backend, a.think, a.temp))
+        show(run_question(a.host, a.model, a.ask, backend, a.think, a.temp, not a.no_retry))
         return
     print("Ask about the phone (empty line to quit).")
     while (q := input("> ").strip()):
-        show(run_question(a.host, a.model, q, backend, a.think, a.temp))
+        show(run_question(a.host, a.model, q, backend, a.think, a.temp, not a.no_retry))
 
 
 if __name__ == "__main__":
