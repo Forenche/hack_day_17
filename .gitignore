@@ -4,3 +4,5 @@
 batterystats*.txt
 packages_uid.txt
 __pycache__/
+
+*.bak

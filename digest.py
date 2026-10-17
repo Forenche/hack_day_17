@@ -57,7 +57,24 @@ BATT_HEALTH = {1: "unknown", 2: "good", 3: "overheat", 4: "dead", 5: "over volta
                6: "unspecified failure", 7: "cold"}
 
 
-def battery_digest(text):
+def capacity_line(text):
+    """Three numbers read with root: charge_full_design, charge_full (uAh) and cycle_count. '' if unreadable."""
+    nums = re.findall(r"^\s*(\d+)\s*$", text or "", re.M)
+    if len(nums) != 3:
+        return ""
+    design, full, cycles = (int(n) for n in nums)
+    if design <= 0 or full <= 0:
+        return ""
+    s = (f"Battery capacity (read with root): design {design / 1000:.0f} mAh; the battery gauge's reported full-charge "
+         f"capacity {full / 1000:.0f} mAh; charge cycles {cycles}.")
+    if full == design:
+        s += " Reported full capacity equals design capacity, which this phone may simply be copying: wear is NOT established."
+    else:
+        s += f" Reported full capacity is {100 * full / design:.0f}% of design (as reported by the gauge)."
+    return s
+
+
+def battery_digest(text, capacity_text=None):
     d = _kv(text)
 
     def num(k):
@@ -84,6 +101,8 @@ def battery_digest(text):
         out.append(f"Battery temperature: {v / 10:.1f} C")
     if (v := num("voltage")) is not None:
         out.append(f"Voltage: {v:.0f} mV")
+    if capacity_text is not None and (cl := capacity_line(capacity_text)):
+        out.append(cl)
     out.append("This is a snapshot: it cannot show why the battery drained earlier.")
     return "\n".join(out)
 
@@ -220,6 +239,7 @@ PRETTY = {"com.google.android.gms": "Google Play services", "com.whatsapp": "Wha
           "com.android.chrome": "Chrome", "com.android.systemui": "System UI",
           "com.supercell.clashroyale": "Clash Royale", "com.twitter.android": "X (Twitter)", "com.ubercab": "Uber"}
 JUNK = ("overlay", ".rro", "auto_generated", "resources", "frameworkres", "cutout")
+WAKE_SHOW_SECS = 15 * 60
 GOOGLE_WAKELOCK_LIMIT = 2 * 3600  # Android vitals: >2h cumulative non-exempt wake lock time per 24h
 
 
@@ -272,8 +292,11 @@ def parse_history(dump):
             h["start"] = "%s-%s-%s %s:%s:%s" % m.groups()
     p = next((i for i in range(start, len(lines)) if "Estimated power use (mAh):" in lines[i]), None)
     if p is not None:
-        if (m := re.search(r"Capacity:\s*(\d+)", lines[p + 1] if p + 1 < len(lines) else "")):
+        cap_line = lines[p + 1] if p + 1 < len(lines) else ""
+        if (m := re.search(r"Capacity:\s*(\d+)", cap_line)):
             h["capacity"] = int(m.group(1))
+        if (m := re.search(r"Computed drain:\s*([\d.]+),\s*actual drain:\s*([\d.\-]+)", cap_line)):
+            h["computed"], h["actual"] = m.group(1), m.group(2)
         in_global, seen = True, set()
         for l in lines[p + 2:p + 6000]:
             if "All kernel wake locks" in l:
@@ -289,6 +312,15 @@ def parse_history(dump):
                 for k, val, dur in re.findall(r"\b(fg|bg|fgs|cached): ([\d.]+(?:e[-+]?\d+)?)(?: \(([^)]*)\))?", m.group(3)):
                     u[k] = (float(val), parse_dur(dur) if dur else None)
                 h["uids"].append(u)
+    k = next((i for i in range(start, len(lines)) if lines[i].strip() == "All kernel wake locks:"), None)
+    h["kernel"] = []
+    if k is not None:
+        for l in lines[k + 1:k + 400]:
+            if (m := re.match(r"\s+Kernel Wake lock (.+?): (\d.*?)(?: \((\d+) times\))? realtime", l)):
+                h["kernel"].append({"name": m.group(1).strip(), "secs": parse_dur(m.group(2)),
+                                    "times": int(m.group(3) or 0)})
+            elif l.strip() == "":
+                break
     w = next((i for i in range(start, len(lines)) if lines[i].strip() == "All partial wake locks:"), None)
     if w is not None:
         for l in lines[w + 1:w + 2000]:
@@ -301,6 +333,17 @@ def parse_history(dump):
             else:
                 break
     return h
+
+
+KERNEL_HINTS = [("rmnet", "mobile data"), ("ipa", "mobile data"), ("qcom_rx", "mobile data"),
+                ("bluetooth", "Bluetooth"), ("uart", "Bluetooth/serial"), ("display", "display"),
+                ("alarmtimer", "alarms"), ("gesture", "gesture/proximity sensor")]
+KERNEL_SHOW_SECS = 10 * 60
+
+
+def kernel_hint(name):
+    n = name.lower()
+    return next((lab for key, lab in KERNEL_HINTS if key in n), None)
 
 
 def history_digest(dump, pkgs=None):
@@ -319,6 +362,10 @@ def history_digest(dump, pkgs=None):
     out.append("mAh values are RELATIVE estimates from Android's power model" +
                (f" (battery capacity {h['capacity']} mAh)" if h["capacity"] else "") +
                ": compare them, never add them up or treat them as exact drain.")
+    if h.get("computed"):
+        out.append(f"Android's own totals: computed drain {h['computed']} mAh, actual drain {h['actual']} mAh"
+                   + (f", battery capacity {h['capacity']} mAh" if h["capacity"] else "")
+                   + " (report them as given; do not convert them to percent)")
     uids = h["uids"]
     total = sum(u["total"] for u in uids) or 1.0
     comp = {k: v for k, v in h["components"].items() if v > 0}
@@ -343,11 +390,32 @@ def history_digest(dump, pkgs=None):
         for i, u in enumerate(sorted(apps, key=lambda u: -u["total"])[:5], 1):
             t = lambda k: (fmt_dur(u[k][1]) if k in u and u[k][1] else "-")
             out.append(f"  {i}. {app_name(u['uid'], pkgs)}: {100 * u['total'] / total:.0f}% | fg {t('fg')} | bg {t('bg')} | fgs {t('fgs')}")
-    wl = sorted(h["wake"], key=lambda x: -x["secs"])[:5]
+    if uids:
+        def off(u):
+            return sum(u[k][0] for k in ("bg", "fgs", "cached") if k in u)
+        offs = sorted([u for u in apps if 100 * off(u) / total >= 1], key=lambda u: -off(u))[:3]
+        out.append("Apps with the most energy used while NOT in the foreground (background + foreground-service + cached; "
+                   "share of attributed estimate): " +
+                   ("; ".join(f"{app_name(u['uid'], pkgs)} {100 * off(u) / total:.0f}%" for u in offs) if offs else "none >= 1%") +
+                   ". Not-in-foreground is not the same as not-used: the app may have been opened earlier.")
+    wl = sorted([x for x in h["wake"] if x["secs"] >= WAKE_SHOW_SECS], key=lambda x: -x["secs"])[:5]
     if wl:
-        out.append("Longest partial wakelocks (can overlap, do not add up):")
+        out.append("Longest partial wakelocks of 15m or more (can overlap, do not add up):")
         out += [f"  {app_name(x['uid'], pkgs)}: {x['name'][:60]} {fmt_dur(x['secs'])}" +
                 (f" ({x['times']}x)" if x["times"] else "") for x in wl]
+    elif h["wake"]:
+        out.append("Partial wakelocks: none of 15m or longer (shorter ones omitted as too small to matter)")
+    kl = sorted([x for x in h["kernel"] if x["secs"] >= KERNEL_SHOW_SECS and x["name"] != "PowerManagerService.WakeLocks"],
+                key=lambda x: -x["secs"])[:6]
+    if kl:
+        out.append("Longest kernel wakelocks of 10m or more, excluding the PowerManagerService.WakeLocks total "
+                   "(can overlap, do not add up; the label after the arrow is only a guess from the name):")
+        for x in kl:
+            hint = kernel_hint(x["name"])
+            out.append(f"  {x['name'][:50]} {fmt_dur(x['secs'])}" + (f" ({x['times']}x)" if x["times"] else "") +
+                       (f" -> name suggests {hint}" if hint else ""))
+    elif h["kernel"]:
+        out.append("Kernel wakelocks: none of 10m or longer")
     out.append("Rule checks (thresholds from Google's Android vitals / Battery Historian docs):")
     per = Counter()
     for x in h["wake"]:
@@ -361,7 +429,7 @@ def history_digest(dump, pkgs=None):
                ("; ".join(f"{app_name(u['uid'], pkgs)} {100 * u['fgs'][0] / total:.0f}%" +
                           (f" ({fmt_dur(u['fgs'][1])} of service time)" if u["fgs"][1] else "") for u in fgs)
                 if fgs else "none") + ". Service hours are wall-clock and say nothing about energy.")
-    out.append("NOT included here: kernel wakelocks, alarms/job counts, per-app network use. "
+    out.append("NOT included here: alarms/job counts, per-app network use. "
                "A cause may only be called 'possible' and must point at a line above.")
     return "\n".join(out)
 
